@@ -30,7 +30,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         name=f"{complex_nm} {building_no} {household_no}호 월패드",
         manufacturer="Hyundai AutoEver",
         model="Hi-oT HEMS",
-        sw_version="2.3.6"
+        sw_version="2.2.1"
     )
 
     entities = []
