@@ -4,7 +4,11 @@ import requests
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from .const import DOMAIN, LOGIN_URL, ENERGY_URL, CLIENT_ID, CONF_USERNAME, CONF_PASSWORD, CONF_SCAN_INTERVAL
+from .const import (
+    DOMAIN, LOGIN_URL, ENERGY_URL, CLIENT_ID, 
+    CONF_USERNAME, CONF_PASSWORD, CONF_SCAN_INTERVAL, 
+    CONF_RETRY_INTERVAL, DEFAULT_RETRY_INTERVAL
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -14,6 +18,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     username = config.get(CONF_USERNAME)
     password = config.get(CONF_PASSWORD)
     scan_interval_minutes = config.get(CONF_SCAN_INTERVAL, 60)
+    retry_interval_minutes = config.get(CONF_RETRY_INTERVAL, DEFAULT_RETRY_INTERVAL)
 
     base_headers = {
         "Content-Type": "application/json; charset=UTF-8",
@@ -22,7 +27,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "User-Agent": "okhttp/4.10.0"
     }
 
-    coordinator = HiothHemsCoordinator(hass, username, password, base_headers, scan_interval_minutes)
+    coordinator = HiothHemsCoordinator(hass, username, password, base_headers, scan_interval_minutes, retry_interval_minutes)
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})
@@ -48,13 +53,16 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 class HiothHemsCoordinator(DataUpdateCoordinator):
     """매 시간 세션을 완벽히 초기화하여 실시간 검침 데이터를 보장하는 코디네이터"""
-    def __init__(self, hass, username, password, headers, interval_minutes):
-        super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=timedelta(minutes=interval_minutes))
+    def __init__(self, hass, username, password, headers, interval_minutes, retry_interval_minutes):
+        self.normal_interval = timedelta(minutes=interval_minutes)
+        self.retry_interval = timedelta(minutes=retry_interval_minutes)
+        super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=self.normal_interval)
         self.username = username
         self.password = password
         self.headers = headers
         self.session = requests.Session()
         self.login_info = {}
+        self.last_update_success = False
 
     def _fetch_data_from_api(self):
         self.session.cookies.clear()
@@ -93,8 +101,36 @@ class HiothHemsCoordinator(DataUpdateCoordinator):
         
         return res_json
 
+    def _is_data_valid(self, data):
+        """서버 반환값이 실제로 유효한지 검증합니다."""
+        if not data or not isinstance(data, dict): 
+            return False
+        energy = data.get("energyusage")
+        if not energy or not isinstance(energy, list) or len(energy) == 0:
+            return False
+        # 전기 사용량 키가 존재하는지 확인하여 완전한 데이터인지 판별
+        if "electricityusagevalu" not in energy[0] or energy[0]["electricityusagevalu"] is None:
+            return False
+        return True
+
     async def _async_update_data(self):
         try:
-            return await self.hass.async_add_executor_job(self._fetch_data_from_api)
+            res_json = await self.hass.async_add_executor_job(self._fetch_data_from_api)
+            
+            # 동적 간격 조정 로직 적용
+            if self._is_data_valid(res_json):
+                if self.update_interval != self.normal_interval:
+                    _LOGGER.info("정상 데이터를 수신하여 기본 갱신 주기로 복귀합니다.")
+                    self.update_interval = self.normal_interval
+            else:
+                if self.update_interval != self.retry_interval:
+                    _LOGGER.warning("서버 데이터가 누락되어 재조회 주기(%s분)로 전환합니다.", self.retry_interval.total_seconds() / 60)
+                    self.update_interval = self.retry_interval
+                    
+            return res_json
+            
         except Exception as err:
+            # 통신/파싱 에러 시에도 재조회 주기로 변경
+            if self.update_interval != self.retry_interval:
+                self.update_interval = self.retry_interval
             raise UpdateFailed(f"하이오티 데이터 폴링 에러: {err}")
