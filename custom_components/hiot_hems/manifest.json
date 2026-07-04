@@ -6,7 +6,7 @@
   "config_flow": true,
   "documentation": "https://github.com/local/hiot_hems",
   "requirements": [],
-  "version": "2.2.0",
+  "version": "2.2.1",
   "iot_class": "cloud_polling",
   "brand": true
 }
