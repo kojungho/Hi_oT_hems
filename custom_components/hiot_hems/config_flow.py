@@ -4,7 +4,11 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from .const import DOMAIN, LOGIN_URL, CLIENT_ID, CONF_USERNAME, CONF_PASSWORD, CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
+from .const import (
+    DOMAIN, LOGIN_URL, CLIENT_ID, CONF_USERNAME, CONF_PASSWORD, 
+    CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL,
+    CONF_RETRY_INTERVAL, DEFAULT_RETRY_INTERVAL
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -14,7 +18,7 @@ class HiotHemsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> HiotHemsOptionsFlowHandler:
+    def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> 'HiotHemsOptionsFlowHandler':
         """기기 설정카드 진입 시 내부 500 에러 없이 핸들러를 바인딩합니다."""
         return HiotHemsOptionsFlowHandler(config_entry)
 
@@ -32,7 +36,8 @@ class HiotHemsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 final_input = {
                     CONF_USERNAME: user_input[CONF_USERNAME],
                     CONF_PASSWORD: user_input[CONF_PASSWORD],
-                    CONF_SCAN_INTERVAL: user_input["갱신_주기_분단위"]
+                    CONF_SCAN_INTERVAL: user_input["갱신_주기_분단위"],
+                    CONF_RETRY_INTERVAL: user_input["에러시_재조회_주기_분단위"]
                 }
                 return self.async_create_entry(
                     title=f"힐스테이트 HEMS ({user_input[CONF_USERNAME]})", 
@@ -45,6 +50,7 @@ class HiotHemsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Required(CONF_USERNAME): str,
             vol.Required(CONF_PASSWORD): str,
             vol.Optional("갱신_주기_분단위", default=DEFAULT_SCAN_INTERVAL): vol.All(vol.Coerce(int), vol.Range(min=5)),
+            vol.Optional("에러시_재조회_주기_분단위", default=DEFAULT_RETRY_INTERVAL): vol.All(vol.Coerce(int), vol.Range(min=1)),
         })
 
         return self.async_show_form(step_id="user", data_schema=data_schema, errors=errors)
@@ -84,15 +90,21 @@ class HiotHemsOptionsFlowHandler(config_entries.OptionsFlow):
             # 변수 충돌 없는 갱신 명령 처리 완료
             self.hass.config_entries.async_update_entry(
                 self._config_entry, 
-                data={**self._config_entry.data, CONF_SCAN_INTERVAL: user_input["갱신_주기_분단위"]}
+                data={
+                    **self._config_entry.data, 
+                    CONF_SCAN_INTERVAL: user_input["갱신_주기_분단위"],
+                    CONF_RETRY_INTERVAL: user_input["에러시_재조회_주기_분단위"]
+                }
             )
             return self.async_create_entry(title="", data={})
 
         current_interval = self._config_entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+        current_retry = self._config_entry.data.get(CONF_RETRY_INTERVAL, DEFAULT_RETRY_INTERVAL)
 
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema({
                 vol.Optional("갱신_주기_분단위", default=current_interval): vol.All(vol.Coerce(int), vol.Range(min=5)),
+                vol.Optional("에러시_재조회_주기_분단위", default=current_retry): vol.All(vol.Coerce(int), vol.Range(min=1)),
             })
         )
